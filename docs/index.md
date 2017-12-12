@@ -27,7 +27,7 @@ the source code.
 ```
 $ mkdir -p local/src
 $ cd src
-
+```
 ## Getting the source code
 
 It's often a good bet to search for `<package_name> download source` to

@@ -227,3 +227,162 @@ flag during linking and do at least one of the following:
 See any operating system documentation about shared libraries for
 more information, such as the ld(1) and ld.so(8) manual pages.
 ```
+
+## Compiling a test program
+
+So, we have it installed, but now we need to take note of what the
+installation told us about how to use it, and there are several
+choices.  To see whether (!) and how they work, we need to have
+a sample program.  Sometimes you'll get lucky and find samples
+in the software documentation, maybe a tutorial section.  Other
+times you are force to ask the Goog: "sample programs for gmp".
+
+
+
+We have one for you, though:  [gmp_sample.c](./gmp_sample.c)
+
+We are going to compile it a couple of different ways.
+
+### Dependent on runtime environment
+
+This is a program in C, so our chosen compiler is `gcc`.  If there
+were no external libraries needed, we would compile with
+```
+$ gcc -o factorial factorial.c 
+/tmp/cctCGE1w.o: In function `fact':
+factorial.c:(.text+0x18): undefined reference to `__gmpz_init_set_ui'
+factorial.c:(.text+0x3a): undefined reference to `__gmpz_mul_ui'
+factorial.c:(.text+0x77): undefined reference to `__gmpz_out_str'
+factorial.c:(.text+0x83): undefined reference to `__gmpz_clear'
+collect2: error: ld returned 1 exit status
+```
+but there are external dependencies.  It's complaining that it can't
+find the functions in GMP, and that's because we didn't tell it to
+use that library.  Let's try again.
+```
+$ gcc -o factorial -l gmp factorial.c
+$ ldd factorial
+	linux-vdso.so.1 =>  (0x00007ffd1c992000)
+	libgmp.so.10 => /lib64/libgmp.so.10 (0x00002acdae737000)
+	libc.so.6 => /lib64/libc.so.6 (0x00002acdae9ae000)
+	/lib64/ld-linux-x86-64.so.2 (0x00002acdae514000)
+```
+That went more weller, so we run the `ldd`, which will list the references
+to external libraries in the program we compiled, and, oh, dear, it's
+not finding the version of `libgmp.so` that we just compiled!  Instead
+it found the one on the system.
+```
+libgmp.so.10 => /lib64/libgmp.so.10
+```
+How do we fix that?  We have to do that in two steps.  First, we have to
+give it a search path for the library when we compile it, then we have
+to give it a path to look in when we run it.  The `LD_LIBRARY_PATH` variable
+is used to instruct programs to look in a set of directories for libraries
+before trying to hunt them up on the system.  You can put a colon-separated
+list of directories in that variable.  If it is empty, then
+```
+$ echo $LD_LIBRARY_PATH
+$ export LD_LIBRARY_PATH=$HOME/local/lib
+```
+If there were something in it already, then you would use
+```
+$ export LD_LIBRARY_PATH=$HOME/local/lib:$LD_LIBRARY_PATH
+```
+which adds `$HOME/local/lib` to the front of what's there. Now,
+we need to tell the compiler where to look when compiling, and do that with
+the `-L` option.
+
+***BIG WARNING***
+
+The `-L` must precede the `-l`.  That is the _where_ specification has to
+come before the _what_ specification.  The big ell says where, the little
+ell says what.  So,
+```
+$ gcc -o factorial -L $HOME/local/lib -l gmp factorial.c
+$ ldd factorial
+	linux-vdso.so.1 =>  (0x00007ffe0639e000)
+	libgmp.so.10 => /home/grundoon/local/lib/libgmp.so.10 (0x00002b3fb43bb000)
+	libc.so.6 => /lib64/libc.so.6 (0x00002b3fb4631000)
+	/lib64/ld-linux-x86-64.so.2 (0x00002b3fb4198000)
+$ ./factorial 128
+128!  =  385620482362580421735677065923463640617493109590223590278828403276373402575165543560686168588507361534030051833058916347592172932262498857766114955245039357760034644709279247692495585280000000000000000000000000000000
+
+```
+The kink in all this is that you somehow have to contrive to always
+set `LD_LIBRARY_PATH` every time you want to run the software, otherwise
+it will fail because it can't find the library, or it will find the wrong
+version.
+
+Why is that?
+
+When compiling this way, the compiler stores only the name of the library.  We
+can see this (sometimes) by using
+```
+$ strings factorial | grep libgmp
+libgmp.so.10
+```
+
+### Passing the run path to linker via environment variable
+
+If we set the _library run path_ variable, `LD_RUN_PATH` before we compile
+our software, that directory will get added to the compiled program. Let's
+see.
+```
+$ export LD_RUN_PATH=$HOME/local/lib
+$ gcc factorial -l gmp factorial.c
+$ strings factorial | egrep "$USER|libgmp"
+libgmp.so.10
+/home/grundoon/local/lib
+
+$ unset LD_RUN_PATH
+$ strings factorial | egrep "$USER|libgmp"
+libgmp.so.10
+/home/bennet/local/lib
+$ ./factorial 32
+32!  =  263130836933693530167218012160000000
+```
+That's significantly better because we only have to remember to set
+the environment variable before we compile the software.
+
+### Passing the run path via compiler option
+
+The final method, as told to us by the installation is to use an
+option that tells the compiler to add the runpath to the program
+explicitly.  With this method, there are no environment variables
+needed at all.
+```
+$ gcc -Wl,-rpath -Wl,$HOME/local/lib -l gmp factorial.c
+$ strings factorial | egrep "$USER|libgmp" 
+libgmp.so.10
+/home/grundoon/local/lib
+$ ./factorial 32
+32!  =  263130836933693530167218012160000000
+```
+What's that doing?  When you compile a program, a lot of things
+go on behind the scenes.  The compilation occurs, with the code
+you are interested in, but there is a lot of other code lying
+about -- stuff that understands how to print to the terminal,
+or access a disk, for example, that needs to be included.  So,
+your bit gets turned into _object code_, and the all the object
+codes get passed to the _linker_, which glues them all together.
+
+The `-Wl,` says to pass along whatever follows it as an instruction
+to the linker.  We have two in a row, so when the linker runs, it
+will get `-rpath $HOME/local/lib` passed to it, and that tells it
+to put that directory into the finished program as a place to look
+for libraries before looking elsewhere.
+
+Whew!
+
+### Which is the _right_ way?
+
+There is no "right" way, just different ways.  How to choose?
+
+I think that using the last way -- passing the linker the run path
+-- may be the most likely to lead to long term happiness.  There
+is nothing hidden from you that might get forgotten later.  It's
+right there in the notes you keep about how to build this software,
+notes that you put into a `Makefile`, riiiiiight?
+
+We've now learned a lot of the things that we will need to make
+a library that depends on another library, to which we turn next.
